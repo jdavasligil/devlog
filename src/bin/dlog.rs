@@ -1,10 +1,11 @@
 // Copyright 2023, Jaedin Davasligil, All rights reserved.
 
-use std::path::Path;
+use std::{path::Path, fs::OpenOptions};
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
-use chrono::{DateTime, Utc, Local, TimeZone};
+use chrono::{DateTime, Utc};
+use csv::StringRecord;
 
 /// Program to track developer time by clocking in and out
 #[derive(Parser, Debug)]
@@ -21,24 +22,56 @@ enum Commands {
     Out,
 }
 
+fn is_clocked_in() -> Result<bool> {
+    let devlog_path = Path::new("DEVLOG.csv");
+    let mut reader = csv::Reader::from_path(devlog_path)?;
+
+    let mut last_record = StringRecord::default();
+
+    for result in reader.records() {
+        last_record = result?;
+    }
+
+    if last_record.into_iter().any(|field| field == "NULL".to_string()) {
+        return Ok(true)
+    }
+
+    Ok(false)
+}
+
 fn clock_in() -> Result<()> {
     let devlog_path = Path::new("DEVLOG.csv");
-    let mut writer = csv::Writer::from_path(devlog_path)?;
+    let mut is_first_run = false;
 
     if !devlog_path.exists() {
-        writer.write_record(&["DATE","TIME_UTC","TIME_LOCAL"])?;
+        is_first_run = true;
+    }
+
+    let devlog_file = OpenOptions::new()
+        .write(true)
+        .create(true)
+        .append(true)
+        .open(devlog_path)
+    ?;
+
+    let mut writer = csv::Writer::from_writer(devlog_file);
+
+    if is_first_run {
+        writer.write_record(&["DATE","CLOCKIN_TIME_UTC","CLOCKOUT_TIME_UTC"])?;
+    }
+    else if is_clocked_in()? {
+        return Err(anyhow!("You are already clocked in!"));
     }
 
     let utc: DateTime<Utc> = Utc::now();
-    let local: DateTime<Local> = Local::now();
 
     writer.write_record(&[
                         utc.format("%Y-%m-%d").to_string(),
                         utc.format("%H:%M:%S").to_string(),
-                        local.format("%H:%M:%S").to_string(),
+                        "NULL".to_string(),
     ])?;
 
-    println!("Clocked in at {}.", local.format("%H:%M:%S").to_string());
+    println!("Clocked in at {} (UTC).", utc.format("%H:%M:%S").to_string());
     Ok(())
 }
 
