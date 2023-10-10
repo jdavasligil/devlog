@@ -1,29 +1,38 @@
 // Copyright 2023, Jaedin Davasligil, All rights reserved.
 
-use std::{path::Path, fs::OpenOptions};
+use std::{path::Path, fs::OpenOptions, io::{SeekFrom, Seek, Read, Write}};
 
 use anyhow::{anyhow, Result};
 use clap::{Parser, Subcommand};
-use chrono::{DateTime, Utc};
+use chrono::{DateTime, Utc, Duration};
 use csv::StringRecord;
+use serde::{Deserialize, Serialize};
 
-/// Program to track developer time by clocking in and out
+/// Program to track developer time by clocking in and out.
 #[derive(Parser, Debug)]
 struct Args {
-    /// The command to be called
+    /// The command to be called.
     #[clap(subcommand)]
     command: Commands,
 }
 
-/// List of available commands
+/// List of available commands.
 #[derive(Debug, Subcommand)]
 enum Commands {
     In,
     Out,
 }
 
-fn is_clocked_in() -> Result<bool> {
-    let devlog_path = Path::new(".devlog");
+#[derive(Debug, Deserialize, Serialize)]
+struct Record {
+    date: String,
+    in_time_utc: String,
+    out_time_utc: String,
+    delta_time_utc: String,
+}
+
+fn get_last_record(path_str: &str) -> Result<StringRecord> {
+    let devlog_path = Path::new(path_str);
     let mut reader = csv::Reader::from_path(devlog_path)?;
 
     let mut last_record = StringRecord::default();
@@ -32,15 +41,35 @@ fn is_clocked_in() -> Result<bool> {
         last_record = result?;
     }
 
-    if last_record.into_iter().any(|field| field == "NULL".to_string()) {
+    Ok(last_record)
+}
+
+fn is_clocked_in(path_str: &str) -> Result<bool> {
+    let last_record = get_last_record(path_str)?;
+
+    if last_record.iter().last() == Some("") {
         return Ok(true)
     }
 
     Ok(false)
 }
 
-fn clock_in() -> Result<()> {
-    let devlog_path = Path::new(".devlog");
+fn get_last_clockin_time(last_record: StringRecord) -> Result<DateTime<Utc>> {
+    let mut utc_string = String::new();
+    let fmt_str = "%Y-%m-%d %H:%M:%S %z";
+
+    utc_string.push_str(&last_record[0]);
+    utc_string.push_str(" ");
+    utc_string.push_str(&last_record[1]);
+    utc_string.push_str(" +00:00");
+
+    let utc_last: DateTime<Utc> = DateTime::parse_from_str(utc_string.as_str(), fmt_str)?.try_into()?;
+    
+    Ok(utc_last)
+}
+
+fn clock_in(path_str: &str) -> Result<()> {
+    let devlog_path = Path::new(path_str);
     let mut is_first_run = false;
 
     if !devlog_path.exists() {
@@ -57,10 +86,15 @@ fn clock_in() -> Result<()> {
     let mut writer = csv::Writer::from_writer(devlog_file);
 
     if is_first_run {
-        writer.write_record(&["DATE","CLOCKIN_TIME_UTC","CLOCKOUT_TIME_UTC"])?;
+        writer.write_record(&[
+                            "date",
+                            "in_time_utc",
+                            "out_time_utc",
+                            "delta_time_utc",
+        ])?;
     }
-    else if is_clocked_in()? {
-        return Err(anyhow!("You are already clocked in!"));
+    else if is_clocked_in(path_str)? {
+        return Err(anyhow!("You are already clocked in."));
     }
 
     let utc: DateTime<Utc> = Utc::now();
@@ -68,23 +102,55 @@ fn clock_in() -> Result<()> {
     writer.write_record(&[
                         utc.format("%Y-%m-%d").to_string(),
                         utc.format("%H:%M:%S").to_string(),
-                        "NULL".to_string(),
+                        "".to_string(),
+                        "".to_string(),
     ])?;
 
     println!("Clocked in at {} (UTC).", utc.format("%H:%M:%S").to_string());
+
     Ok(())
 }
 
-fn clock_out() {
-    println!("Clock out!");
+fn clock_out(path_str: &str) -> Result<()> {
+    let devlog_path = Path::new(path_str);
+
+    if !devlog_path.exists() || !is_clocked_in(path_str)? {
+        return Err(anyhow!("You need to clock in first."));
+    }
+
+    let mut devlog_file = OpenOptions::new()
+        .write(true)
+        .create(false)
+        .append(false)
+        .open(devlog_path)
+    ?;
+
+    (&devlog_file).seek(SeekFrom::End(-2))?;
+
+    let last_record = get_last_record(path_str)?;
+
+    let utc_curr: DateTime<Utc> = Utc::now();
+    let utc_last: DateTime<Utc> = get_last_clockin_time(last_record)?;
+    let delta: Duration = utc_curr.signed_duration_since(utc_last);
+
+    let mut write_str = String::new();
+    write_str.push_str(utc_curr.format("%H:%M:%S").to_string().as_str());
+    write_str.push_str(",");
+    write_str.push_str(delta.num_seconds().to_string().as_str());
+
+    devlog_file.write(write_str.as_bytes())?;
+
+    println!("Clocked out at {} (UTC).", utc_curr.format("%H:%M:%S").to_string());
+    Ok(())
 }
 
 fn main() -> Result<()> {
     let args = Args::parse();
+    let path_string = ".devlog";
 
     match args.command {
-        Commands::In => clock_in()?,
-        Commands::Out => clock_out(),
+        Commands::In => clock_in(path_string)?,
+        Commands::Out => clock_out(path_string)?,
     }
 
     Ok(())
