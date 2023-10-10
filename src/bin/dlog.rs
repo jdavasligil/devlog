@@ -23,7 +23,7 @@ enum Commands {
 }
 
 fn is_clocked_in() -> Result<bool> {
-    let devlog_path = Path::new("DEVLOG.csv");
+    let devlog_path = Path::new(".devlog");
     let mut reader = csv::Reader::from_path(devlog_path)?;
 
     let mut last_record = StringRecord::default();
@@ -40,7 +40,7 @@ fn is_clocked_in() -> Result<bool> {
 }
 
 fn clock_in() -> Result<()> {
-    let devlog_path = Path::new("DEVLOG.csv");
+    let devlog_path = Path::new(".devlog");
     let mut is_first_run = false;
 
     if !devlog_path.exists() {
